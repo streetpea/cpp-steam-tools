@@ -13,11 +13,12 @@
 //Header of the shortcut file, used to check validity
 std::vector<char> fileHeader = { 0x00, 0x73, 0x68, 0x6F, 0x72, 0x74, 0x63, 0x75, 0x74, 0x73, 0x00 };
 
-SteamTools::SteamTools(const std::function<void(const QString&)>& infoFunction, const std::function<void(const QString&)>& errorFunction): infoFunction(infoFunction),
-    errorFunction(errorFunction) {
+SteamTools::SteamTools(const std::function<void(const QString&)>& infoFunction, const std::function<void(const QString&)>& errorFunction, const QString& steamDir): infoFunction(infoFunction),
+    errorFunction(errorFunction), steamBaseDir(steamDir) {
 
     //These won't change so set them once when instantiating the object
-    steamBaseDir = getSteamBaseDir();
+    if(steamBaseDir.isEmpty())
+        steamBaseDir = getSteamBaseDir();
     mostRecentUser = getMostRecentUser();
     shortcutFile = getShortcutFile();
 }

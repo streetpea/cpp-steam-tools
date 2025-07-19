@@ -11,7 +11,7 @@ class SteamTools
 {
 
 public:
-    SteamTools(const std::function<void(const QString&)>& infoFunction, const std::function<void(const QString&)>& errorFunction);
+    SteamTools(const std::function<void(const QString&)>& infoFunction, const std::function<void(const QString&)>& errorFunction, const QString& steamDir);
 
     bool steamExists();
     QVector<SteamShortcutEntry> parseShortcuts();
