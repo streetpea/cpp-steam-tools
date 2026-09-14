@@ -14,6 +14,7 @@ public:
     SteamTools(const std::function<void(const QString&)>& infoFunction, const std::function<void(const QString&)>& errorFunction, const QString& steamDir);
 
     bool steamExists();
+    bool steamUserFound() const;
     QVector<SteamShortcutEntry> parseShortcuts();
     SteamShortcutEntry buildShortcutEntry(QString appName, QString filepath, QString launchOptions, QMap<QString, const QPixmap*> artwork);
     void updateShortcuts(QVector<SteamShortcutEntry> shortcuts);
@@ -28,6 +29,8 @@ private:
     std::function<void(const QString&)> errorFunction;
     QString getSteamBaseDir();
     QString getMostRecentUser();
+    QString getUserFromLoginUsers();
+    QString getUserFromUserdataDir();
     QString getShortcutFile();
     QString generateShortAppId(QString exe, QString appname);
     uint32_t generateShortcutId(QString exe, QString appname);
