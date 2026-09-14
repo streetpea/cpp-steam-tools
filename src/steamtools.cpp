@@ -5,6 +5,8 @@
 #include <qtextstream.h>
 #include <sstream>
 #include <QDir>
+#include <QDateTime>
+#include <QFileInfo>
 
 #include "../include/crc.h"
 #include "../include/vdf_parser.hpp"
@@ -55,13 +57,61 @@ QString SteamTools::getSteamBaseDir() {
 }
 
 /**
- * \brief Read the loginusers.vdf from the steam directory to find the most recently logged in user
- * \return the User's ID as a QString
+ * \brief Extract the value of a simple `"key"  "value"` vdf line
+ * \return the value as a QString, empty if the line isn't a key/value pair
+ */
+static QString vdfLineValue(const QString &line) {
+    int keyStart = line.indexOf('"');
+    if (keyStart < 0)
+        return QString();
+    int keyEnd = line.indexOf('"', keyStart + 1);
+    if (keyEnd < 0)
+        return QString();
+    int valueStart = line.indexOf('"', keyEnd + 1);
+    if (valueStart < 0)
+        return QString();
+    int valueEnd = line.indexOf('"', valueStart + 1);
+    if (valueEnd < 0)
+        return QString();
+    return line.mid(valueStart + 1, valueEnd - valueStart - 1);
+}
+
+/**
+ * \brief Convert a 64 bit SteamID into the account id Steam uses for userdata directories
+ * \return the account id as a QString, empty if the SteamID could not be converted
+ */
+static QString steamIdToAccountId(const QString &steamId) {
+    bool ok = false;
+    unsigned long long steamIdNumber = steamId.toULongLong(&ok);
+    if (!ok || steamIdNumber < 76561197960265728ULL)
+        return QString();
+    return QString::number(steamIdNumber - 76561197960265728ULL);
+}
+
+/**
+ * \brief Find the active steam user, preferring loginusers.vdf and falling back to the userdata dir
+ * \return the User's ID as a QString, empty if no user could be determined
  */
 QString SteamTools::getMostRecentUser() {
-    QString steamid;
-    QString user_id;
+    QString user_id = getUserFromLoginUsers();
 
+    // Newer Steam clients don't always mark an account in loginusers.vdf, so fall back to
+    // looking at the userdata directories that Steam has actually created on disk.
+    if (user_id.isEmpty())
+        user_id = getUserFromUserdataDir();
+
+    if (user_id.isEmpty())
+        errorFunction(QString("Could not determine the logged in Steam user from %1, "
+                              "no Steam shortcut can be created").arg(steamBaseDir));
+
+    return user_id;
+}
+
+/**
+ * \brief Read the loginusers.vdf from the steam directory to find the logged in user
+ * \return the User's ID as a QString, empty if no user could be determined
+ */
+QString SteamTools::getUserFromLoginUsers() {
     //Get the loginUsers file
     QString steamConfigFilePath = QString("%1/config/loginusers.vdf").arg(steamBaseDir);
     QFile steamConfigfile(steamConfigFilePath);
@@ -69,40 +119,114 @@ QString SteamTools::getMostRecentUser() {
     //Open the file and print any errors
     if (!steamConfigfile.open(QIODevice::ReadOnly | QIODevice::Text)) {
         errorFunction(QString("Failed to open loginusers.vdf: %1").arg(steamConfigfile.errorString()));
-        return nullptr;
+        return QString();
     }
 
     // Create a QTextStream to read from the file
     QTextStream in(&steamConfigfile);
 
+    QString currentSteamId;
+    QString activeSteamId;
+    QString newestSteamId;
+    unsigned long long newestTimestamp = 0;
+    QStringList allSteamIds;
+
     // Read the file line by line
     while (!in.atEnd()) {
         QString line = in.readLine();
 
-        if (line.contains("7656119") && !line.contains("PersonalName")) {
-            steamid = line.mid(line.indexOf("7656119"), line.size() - 1);
-        } else if ((line.contains("mostrecent", Qt::CaseInsensitive) || line.contains("MostRecent")) &&
-                   line.contains("\"1\"")) {
-            unsigned long long steamidLongLong = atoll(steamid.toStdString().c_str());
-            steamidLongLong -= 76561197960265728;
-            user_id = QString::fromStdString(std::to_string(steamidLongLong));
+        if (line.contains("7656119") && !line.contains("PersonaName", Qt::CaseInsensitive)) {
+            currentSteamId = line.mid(line.indexOf("7656119"));
+            currentSteamId = currentSteamId.left(currentSteamId.indexOf('"'));
+            if (!currentSteamId.isEmpty() && !allSteamIds.contains(currentSteamId))
+                allSteamIds.append(currentSteamId);
+            continue;
+        }
+
+        if (currentSteamId.isEmpty())
+            continue;
+
+        // Steam used to mark the active account with "MostRecent", newer clients use "AutoLogin".
+        // "AllowAutoLogin" is a different setting and is set for every remembered account.
+        if ((line.contains("mostrecent", Qt::CaseInsensitive) || line.contains("autologin", Qt::CaseInsensitive)) &&
+            !line.contains("allowautologin", Qt::CaseInsensitive) && line.contains("\"1\"")) {
+            activeSteamId = currentSteamId;
+        } else if (line.contains("timestamp", Qt::CaseInsensitive)) {
+            bool ok = false;
+            unsigned long long timestamp = vdfLineValue(line).toULongLong(&ok);
+            if (ok && timestamp >= newestTimestamp) {
+                newestTimestamp = timestamp;
+                newestSteamId = currentSteamId;
+            }
         }
     }
 
     // Close the file
     steamConfigfile.close();
 
-    return user_id;
+    // Prefer the account Steam marked as active, then the most recently used one,
+    // then the only account in the file if there is just one.
+    QString steamId = activeSteamId;
+    if (steamId.isEmpty())
+        steamId = newestSteamId;
+    if (steamId.isEmpty() && allSteamIds.size() == 1)
+        steamId = allSteamIds.first();
+
+    return steamIdToAccountId(steamId);
+}
+
+/**
+ * \brief Find the steam user by looking at the userdata directories Steam created on disk
+ * \return the User's ID as a QString, empty if no user could be determined
+ */
+QString SteamTools::getUserFromUserdataDir() {
+    QDir userdataDir(QString("%1/userdata").arg(steamBaseDir));
+    if (!userdataDir.exists())
+        return QString();
+
+    QString userId;
+    QDateTime newest;
+
+    const QStringList entries = userdataDir.entryList(QDir::Dirs | QDir::NoDotAndDotDot);
+    for (const QString &entry : entries) {
+        bool ok = false;
+        // Skips non user directories such as "config" as well as the anonymous user "0"
+        if (entry.toULongLong(&ok) == 0 || !ok)
+            continue;
+
+        // Use the account's own config as the timestamp when it is there, the directory itself otherwise
+        QFileInfo info(userdataDir.filePath(QString("%1/config/localconfig.vdf").arg(entry)));
+        if (!info.exists())
+            info = QFileInfo(userdataDir.filePath(entry));
+
+        if (userId.isEmpty() || info.lastModified() > newest) {
+            userId = entry;
+            newest = info.lastModified();
+        }
+    }
+
+    return userId;
 }
 
 /**
  * \brief Get path to shortcuts.vdf as a QString using steam base dir and current user
- * \return QString of path to shortcuts.vdf
+ * \return QString of path to shortcuts.vdf, empty if there is no steam user
  */
 QString SteamTools::getShortcutFile() {
+    if (mostRecentUser.isEmpty())
+        return QString();
+
     return QString("%1/userdata/%2/config/shortcuts.vdf")
         .arg(steamBaseDir)
         .arg(mostRecentUser);
+}
+
+/**
+ * \brief Did we find a steam user to create the shortcut for?
+ * \return bool if we found a steam user
+ */
+bool SteamTools::steamUserFound() const {
+    return !mostRecentUser.isEmpty();
 }
 
 /**
