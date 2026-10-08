@@ -61,6 +61,7 @@ QString SteamTools::getSteamBaseDir() {
 QString SteamTools::getMostRecentUser() {
     QString steamid;
     QString user_id;
+    QString auto_login_user_id;
 
     //Get the loginUsers file
     QString steamConfigFilePath = QString("%1/config/loginusers.vdf").arg(steamBaseDir);
@@ -81,18 +82,22 @@ QString SteamTools::getMostRecentUser() {
 
         if (line.contains("7656119") && !line.contains("PersonalName")) {
             steamid = line.mid(line.indexOf("7656119"), line.size() - 1);
-        } else if ((line.contains("mostrecent", Qt::CaseInsensitive) || line.contains("MostRecent")) &&
+        } else if ((line.contains("\"MostRecent\"", Qt::CaseInsensitive) ||
+                    line.contains("\"AutoLogin\"", Qt::CaseInsensitive)) &&
                    line.contains("\"1\"")) {
             unsigned long long steamidLongLong = atoll(steamid.toStdString().c_str());
             steamidLongLong -= 76561197960265728;
-            user_id = QString::fromStdString(std::to_string(steamidLongLong));
+            if (line.contains("\"MostRecent\"", Qt::CaseInsensitive))
+                user_id = QString::fromStdString(std::to_string(steamidLongLong));
+            else
+                auto_login_user_id = QString::fromStdString(std::to_string(steamidLongLong));
         }
     }
 
     // Close the file
     steamConfigfile.close();
 
-    return user_id;
+    return user_id.isEmpty() ? auto_login_user_id : user_id;
 }
 
 /**
